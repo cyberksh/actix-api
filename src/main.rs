@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::fs;
+
 use actix_web::{get, middleware, web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 
@@ -6,43 +9,58 @@ struct Package {
     path: String,
 }
 
-#[derive(Serialize)]
-struct NotFoundResponse {
-    message: String,
+#[derive(Serialize, Debug)]
+struct Metadata {
+    name: String,
+    _type: String,
 }
 
-#[derive(Serialize)]
-struct ValidationErrorResponse {
-    message: String,
-}
-
-fn check_valid_path(path: &str) -> bool {
-    if path == "test/fail" {
-        return false;
-    }
-
-    true
+#[derive(Serialize, Debug)]
+struct Data {
+    metadata: String,
+    data: HashMap<String, Metadata>,
 }
 
 #[get("/packages")]
 async fn get_package_data(package: web::Query<Package>) -> impl Responder {
-    let is_valid_path = check_valid_path(&package.path);
+    let paths = fs::read_dir(&package.path).unwrap();
 
-    if !is_valid_path {
-        let response = ValidationErrorResponse {
-            message: "Invalid path".to_string(),
+    let mut children = HashMap::new();
+
+    for path in paths {
+        let safe_path = path.unwrap();
+        let path_type = {
+            if safe_path.file_type().unwrap().is_dir() {
+                String::from("dir")
+            } else if safe_path.file_type().unwrap().is_file() {
+                String::from("file")
+            } else if safe_path.file_type().unwrap().is_symlink() {
+                String::from("link")
+            } else {
+                String::from("unknown")
+            }
         };
-        return HttpResponse::BadRequest().json(response);
+
+        children.insert(
+            safe_path.path().to_str().unwrap().to_string(),
+            Metadata {
+                name: safe_path.file_name().to_str().unwrap().to_string(),
+                _type: path_type,
+            },
+        );
     }
 
-    HttpResponse::Ok().body(format!("Hello {}!", package.path))
+    let response = Data {
+        // How do I do this without clone?
+        metadata: package.path.clone(),
+        data: children,
+    };
+
+    HttpResponse::Ok().json(response)
 }
 
 async fn default_not_found_handler() -> HttpResponse {
-    let response = NotFoundResponse {
-        message: "Not found".to_string(),
-    };
-    HttpResponse::NotFound().json(response)
+    HttpResponse::NotFound().json(serde_json::json!({"message": "not found"}))
 }
 
 #[actix_web::main]
